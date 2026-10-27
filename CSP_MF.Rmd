@@ -1,0 +1,1628 @@
+---
+title: "Pre-vaccine genetic landscape of Plasmodium falciparum circumsporozoite protein haplotypes in southern Africa"
+author: "Zoe Gotthold"
+date: "2025-06-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+library(ggplot2)
+library(tidyr)
+library(stringr)
+library(Biostrings)
+library(ggpubr)
+library(sf)
+library(viridis)
+library(ggpmisc)
+library(patchwork)
+library(gtsummary)
+library(ggpmisc)
+library(readxl)
+library(readr)
+library(dplyr)
+
+conflicted::conflicts_prefer(readxl::read_xlsx)
+conflicted::conflicts_prefer(stats::chisq.test)
+conflicted::conflicts_prefer(dplyr::filter)
+conflicted::conflicts_prefer(base::as.factor)
+
+offset = 1
+V31B_amp = "QGHNMPNDPNRNVDENANANSAVKNNNNEEPSDKHIKEYLNKIQNSLSTEWSPCSVTCGNGIQ"
+V32_amp = "TCGNGIQVRIKPGSANKPKDELDYANDIEKKICKMEKCSSVFNVVNSSIGLIMVLSFLFL"
+DV10 = substring(V31B_amp, 293-281+offset + 1, 302 - 281+offset + 1) # confirmed by Dr. Neafsey
+Th2R = substring(V31B_amp, 311-281+offset, 327 - 281+offset)
+Th3R = substring(V32_amp, 352-337+offset, 363-337+offset)
+
+PRINT_PLOTS = FALSE
+```
+
+## Reading in Dataframes
+
+```{r dataframe read-in}
+#setwd("C://Users/zoeor/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/CSP PAPER/")
+setwd("/Users/gotthold/JHU - OneDrive/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/CSP PAPER/")
+#setwd("C://Users/zgottho2/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/CSP project/")
+
+country_key_map <- read.csv("DATA/country_key_map.csv")
+country_key_map_short <- country_key_map %>% group_by(My_Regions) %>% dplyr::summarize(COUNTRY = min(COUNTRY), NAME = min(Regions_ESA))
+
+metadata <- read.csv("DATA/All_GenE8_Countries_Epi_Harmonized_SA.csv") 
+COI_table <- read.csv("DATA/coi_table.csv")
+COI_table$coi <- as.numeric(COI_table$estimated_coi)
+
+R.asv <- read.csv("DATA/ExportAllelesCSP_ASV_FILTERED.csv") %>% filter()
+
+```
+
+```{r mutation analysis}
+asvs_translated <- R.asv %>%
+  mutate(
+    AA = case_when(target_id == "Pf3D7_03_v3-221463-221712-1B" ~ 
+                     as.character(
+                       Biostrings::translate(reverseComplement(DNAStringSet(substr(seq,3,193-2))))),
+                   target_id == "Pf3D7_03_v3-221295-221532-2" ~
+                     as.character(
+                       Biostrings::translate(reverseComplement(DNAStringSet(substr(seq,1,182-2)))))))
+
+### we need to identify the various codons present in this data
+
+### codon 281 is 
+
+amp1 = asvs_translated %>% filter(target_id == "Pf3D7_03_v3-221463-221712-1B")
+for(codon_ix in 281:(281+63-1)){ # we pull these from the initial amplicon
+  amp1[,paste0("codon", codon_ix)] = substring(amp1$AA, codon_ix-281+1, codon_ix-281+1)
+  ## calculate frequency for entire population
+}
+
+amp1_long = amp1 %>% pivot_longer(cols = starts_with("codon"),
+                                  names_to = "CodonID", values_to = "AA_codon")
+
+### next we can run dcifer
+library(dcifer)
+amp1_long_coi <- amp1_long %>% left_join(COI_table, by = join_by(specimen_id))
+dcifer_input_amp1 = formatDat(amp1_long_coi, svar = "specimen_id", lvar = "CodonID", avar = "AA_codon")
+dcifer_freqs_amp1 = calcAfreq(dcifer_input_amp1, amp1_long_coi$estimated_coi)
+str(dcifer_freqs_amp1, list.len = 2)
+dcifer_freqs_df_amp1 = data.frame(unlist(dcifer_freqs_amp1)) %>% tibble::rownames_to_column("CodonID.AA") %>%
+  mutate(CodonID = str_split_i(CodonID.AA, "\\.", 1),
+         AA = str_split_i(CodonID.AA, "\\.", 2),
+         codon_numeric = as.numeric(substring(CodonID, 6, 9)))
+
+amp1_reference_table = data.frame(CodonID = 281:(281+63-1),
+                                  "reference" = str_split(V31B_amp, ""))
+colnames(amp1_reference_table) = c("CodonID", "reference")
+
+dcifer_freqs_amp1 = dcifer_freqs_df_amp1 %>% left_join(amp1_reference_table, by = join_by(codon_numeric == CodonID))  %>% 
+  mutate(match = AA == reference) %>% mutate(cleaned_AA = ifelse(match, NA, AA))
+
+### REPEAT FOR AMPLICON 2
+
+amp2 = asvs_translated %>% filter(target_id == "Pf3D7_03_v3-221295-221532-2")
+for(codon_ix in 337:(337+60-1)){ # we pull these from the initial amplicon
+  amp2[,paste0("codon", codon_ix)] = substring(amp2$AA, codon_ix-337+1, codon_ix-337+1)
+  ## calculate frequency for entire population
+}
+
+amp2_long = amp2 %>% pivot_longer(cols = starts_with("codon"),
+                                  names_to = "CodonID", values_to = "AA_codon")
+amp2_long_coi <- amp2_long %>% left_join(COI_table, by = join_by(specimen_id))
+dcifer_input_amp2 = formatDat(amp2_long_coi, svar = "specimen_id", lvar = "CodonID", avar = "AA_codon")
+dcifer_freqs_amp2 = calcAfreq(dcifer_input_amp2, amp2_long_coi$estimated_coi)
+
+dcifer_freqs_df_amp2 = data.frame(unlist(dcifer_freqs_amp2)) %>% tibble::rownames_to_column("CodonID.AA") %>%
+  mutate(CodonID = str_split_i(CodonID.AA, "\\.", 1),
+         AA = str_split_i(CodonID.AA, "\\.", 2),
+         codon_numeric = as.numeric(substring(CodonID, 6, 9)))
+
+amp2_reference_table = data.frame(CodonID = 337:(337+60-1),
+                                  "reference" = str_split(V32_amp, ""))
+colnames(amp2_reference_table) = c("CodonID", "reference")
+
+dcifer_freqs_amp2 = dcifer_freqs_df_amp2 %>% left_join(amp2_reference_table, by = join_by(codon_numeric == CodonID))  %>% 
+  mutate(match = AA == reference) %>% mutate(cleaned_AA = ifelse(match, NA, AA))
+
+
+both_amplicons = rbind(dcifer_freqs_amp1 %>% dplyr::rename(freq = unlist.dcifer_freqs_amp1.), 
+                       dcifer_freqs_amp2 %>% dplyr::rename(freq = unlist.dcifer_freqs_amp2.)) %>%
+  group_by(CodonID.AA, AA, codon_numeric, reference, cleaned_AA) %>%
+  dplyr::summarise(freq = mean(freq))
+
+
+
+ggplot(both_amplicons, aes(x = codon_numeric, y = freq, fill = cleaned_AA)) + geom_bar(stat = "identity") + 
+  ggtitle("Mutations in CSP C-Terminus") +
+  ggplot2::annotate("rect",xmin = 293,xmax = 302, ymin = 1.01, ymax = 1.04, fill = "darkblue") +
+  geom_line(data = data.frame(target = c("DV10", "Th2R", "Th3R"), cleaned_AA = c(NA,NA,NA),
+                              freq = c(0, 0, 0),
+                              codon_numeric = c(352, 352, 352)), aes(color = target)) + 
+  ggplot2::annotate("rect", xmin = 311, xmax = 327, ymin = 1.01, ymax = 1.04, fill = "turquoise4") +
+  ggplot2::annotate("rect", xmin = 352, xmax = 363, ymin = 1.01, ymax = 1.04, fill = "yellowgreen") +
+  scale_color_manual(values = c("DV10" = "darkblue",
+                               "Th2R" = "turquoise4",
+                               "Th3R" = "yellowgreen")) +
+  xlab("Codon Index") + 
+  ylab("Dcifer-Estimated Population Frequency") +
+  labs(fill = "Mutations", color = "Epitope")
+
+```
+
+```{r malaria.em phasing}
+check_match <- function(string, correct_seq){
+  ans <- ""
+  for(char_ix in 1:nchar(correct_seq)){
+    if(substring(correct_seq, char_ix, char_ix)==substring(string, char_ix, char_ix)){
+      char = "_"
+    }
+    else {char = substring(string, char_ix, char_ix)}
+    ans <- paste(ans, char, sep="")
+  }
+  return(ans)
+}
+
+malaria.em.phasing_AA <- read.csv("DATA/phasing_results/ALL_phasing_AA.csv") %>% 
+  mutate(pID = paste(gt_id, province)) %>% dplyr::select(-X, -gt_id, -id_col)
+
+malaria.em.phasing_AA <- malaria.em.phasing_AA %>% 
+  filter(province != "Lunda Sul") %>%
+  pivot_wider(names_from = target_id, values_from = c(seq)) %>%
+  mutate(
+    AA_1 = `Pf3D7_03_v3-221463-221712-1B`,
+    AA_2 = `Pf3D7_03_v3-221295-221532-2`) %>%
+  rowwise() %>%
+  mutate(
+    distance1 =  adist(AA_1, V31B_amp)[1],
+    distance2 = adist(AA_2, V32_amp)[1],
+    total_distance = distance1 + distance2
+    ) %>% dplyr::select(-c(`Pf3D7_03_v3-221463-221712-1B`, `Pf3D7_03_v3-221295-221532-2`, pID, distance1, distance2))
+
+cat("There are", n_distinct(malaria.em.phasing_AA %>% 
+                              filter(freq > 1e-5) %>%
+                              mutate(total_seq = paste0(AA_1, AA_2)) %>% pull(total_seq)),
+    "unique multilocus haplotypes at a frequency of at least 10^-5")
+
+
+freq.3D7 <- malaria.em.phasing_AA %>% filter(total_distance == 0)
+no_3D7 <- unique(country_key_map$My_Regions)[!(unique(country_key_map$My_Regions) %in% freq.3D7$province)]
+for(province in no_3D7){
+  freq.3D7 <- freq.3D7 %>% rbind(data.frame(c(0, 0, province, NA, NA, 0)))
+}
+  
+  
+freq.3D7$freq <- as.numeric(freq.3D7$freq)
+## 2 are missing = none freq.3D7
+
+malaria.em.phasing_u5 <- read.csv("DATA/phasing_results/ALL_phasing_children_under_5_AA.csv") %>% 
+  mutate(pID = paste(gt_id, province)) %>% dplyr::select(-X, -gt_id, -id_col) %>%
+  filter(province != "Lunda Sul") %>%
+  pivot_wider(names_from = target_id, values_from = c(seq)) %>%
+  mutate(
+    AA_1 = `Pf3D7_03_v3-221463-221712-1B`,
+    AA_2 = `Pf3D7_03_v3-221295-221532-2`) %>%
+  rowwise() %>%
+  mutate(
+    distance1 =  adist(AA_1, V31B_amp)[1],
+    distance2 = adist(AA_2, V32_amp)[1],
+    total_distance = distance1 + distance2
+    ) %>% dplyr::select(-c(`Pf3D7_03_v3-221463-221712-1B`, `Pf3D7_03_v3-221295-221532-2`, pID, distance1, distance2))
+
+freq.3D7_u5 <- malaria.em.phasing_u5 %>% filter(total_distance == 0) %>% 
+  full_join(country_key_map_short %>% dplyr::select(My_Regions), by = join_by(province==My_Regions)) %>%
+  mutate(freq = replace_na(freq, 0))
+
+
+  
+
+# ## Data phased at the "Country" level (not province)
+# malaria.em.COUNTRY.phasing <- read.csv("DATA/phasing_results/ALL_phasing_country_level_AA.csv") %>% 
+#   mutate(pID = paste(gt_id, province)) %>% dplyr::select(-X, -gt_id, -id_col) %>%
+#   pivot_wider(names_from = target_id, values_from = c(seq)) %>%
+#   mutate(
+#     AA_1 = as.character(
+#       Biostrings::translate(reverseComplement(DNAStringSet(substr(`Pf3D7_03_v3-221463-221712-1B`,3,193-2))))),
+#     AA_2 = as.character(
+#       Biostrings::translate(reverseComplement(DNAStringSet(substr(`Pf3D7_03_v3-221295-221532-2`,1,182-2)))))) %>%
+#   rowwise() %>%
+#   mutate(
+#     distance1 =  adist(AA_1, V31B_amp)[1],
+#     distance2 = adist(AA_2, V32_amp)[1],
+#     total_distance = distance1 + distance2
+#     ) %>% dplyr::select(-c(`Pf3D7_03_v3-221463-221712-1B`, `Pf3D7_03_v3-221295-221532-2`, pID, distance1, distance2)) %>%
+#   mutate(DV10_col =  substring(AA_1, 293-281+1, 302 - 281+1),
+#          Th2R_col = substring(AA_1, 311-281+1, 327 - 281+1),
+#          Th3R_col = substring(AA_2, 352-337+1, 363-337+1),
+#          mutated_seqs = paste(
+#            unlist(lapply(DV10_col, check_match, DV10)),
+#            unlist(lapply(Th2R_col, check_match, Th2R)),
+#            unlist(lapply(Th3R_col, check_match, Th3R)), sep = "   ")) %>%
+#   group_by(AA_1, AA_2) %>%
+#   mutate(avg = mean(freq))
+
+```
+
+
+
+
+```{r Figure 2A}
+## TODO should this be country??
+####FIGURE 2A######
+malaria.em.phasing_PLOT <- merge(malaria.em.phasing_AA, country_key_map_short, by.x = "province", by.y = "My_Regions")
+malaria.em.phasing_PLOT_BAR <- malaria.em.phasing_PLOT %>% group_by(total_distance, province, NAME, COUNTRY) %>% 
+  dplyr::summarize(total = sum(freq))
+
+## Supplementary Figure
+distance_adults <- ggplot(malaria.em.phasing_PLOT_BAR, aes(x = as.factor(total_distance), y = total)) + 
+  geom_boxplot(outliers = F) + geom_point(aes(color = COUNTRY), color = "black") + theme_bw() + 
+  xlab("Distance from 3D7") + 
+  ylab('Total Frequency by Province') + ggtitle("Adults")
+#ggsave("FIGURES/Supplemental/Phased/distance_to_3D7.png", height = 5, width = 7)
+
+
+## Supplementary Figure - CHILDREN
+malaria.em.phasing_PLOT_CHILDREN <- merge(malaria.em.phasing_u5, country_key_map_short, by.x = "province", by.y = "My_Regions")
+malaria.em.phasing_PLOT_BAR_CHILDREN <- malaria.em.phasing_PLOT_CHILDREN %>% group_by(total_distance, province, NAME, COUNTRY) %>% 
+  dplyr::summarize(total = sum(freq))
+distance_children <- ggplot(malaria.em.phasing_PLOT_BAR_CHILDREN, aes(x = as.factor(total_distance), y = total)) + 
+  geom_boxplot(outliers = F) + geom_point(aes(color = COUNTRY), color = "black") + theme_bw() + 
+  xlab("Distance from 3D7") + 
+  ylab('Total Frequency by Province') + ggtitle("Children")
+#ggsave("FIGURES/Supplemental/Phased/distance_to_3D7_children.png", height = 5, width = 7)
+
+distance_adults / distance_children
+ggsave("FIGURES/Supplemental/Phased/distance_to_3D7_children_vs_adults.png", height = 7, width = 7)
+### Making figure 2A
+myplots <- vector('list', 5)
+i <- 1
+for(country in c("Angola", "Eswatini", "Namibia", "South Africa", "Zambia")){
+  df <- malaria.em.phasing_PLOT_BAR %>% filter(COUNTRY == country) %>%
+    group_by(NAME) %>%
+    summarise(cat_0 = sum(total[total_distance==0]),
+              cat_1_4 = sum(total[total_distance %in% c(1, 2, 3, 4)]),
+              cat_5_7 = sum(total[total_distance %in% c(5, 6, 7)]),
+              cat_8_10 = sum(total[total_distance %in% c(8, 9, 10)]),
+              cat_plus = sum(total[total_distance >11])) %>%
+    pivot_longer(cols = contains("cat"))
+  plot <- ggplot(df) + 
+    geom_bar(aes(x = NAME, y = value, fill = name), stat = "identity", position = position_fill(reverse = TRUE)) + 
+    labs(color = NULL) + ggtitle(country) +
+    guides(color = guide_legend(ncol = 2)) +
+    ylab("Proportion of Parasites") + xlab(NULL) + theme_bw() + theme(legend.position = "bottom", legend.direction = "vertical",
+                                                                       plot.title = element_text(hjust = 0.5, size = 9),
+                                                                       axis.text.x = element_text(angle=90, vjust=0.5, hjust=1)) 
+  plot
+  myplots[[i]] <- plot + scale_fill_brewer(labels = c("0", "1-4", "5-7", "8-10", "11+"),
+                                           palette = "Purples",
+                                             name = "Edit Distance\nto 3D7")
+  i <- i +1
+}
+FIG_2A <- wrap_plots(myplots, ncol = 5, widths = c(7, 1, 3, 2, 10)) + plot_layout(guides = "collect", axes = "collect", )
+FIG_2A
+
+ggsave("FIGURES/2a.png", width = 12, height = 7)
+```
+
+## Full EA Setup
+
+```{r Andres country code, message = FALSE}
+## AFRICA
+shpfile_africa = st_read("DATA/ShapeFiles_Andres/afr_g2014_2013_0.shp")
+
+## ANGOLA
+angola.shpfile_adm2<-st_read("DATA/ShapeFiles_Andres/ago_admbnda_adm2_gadm_ine_ocha_20180904.shp") %>% 
+  mutate(ADM2_EN = case_match(ADM2_EN,
+                              "Luena" ~ "Moxico",
+                              "Cuito (Kuito)" ~ "Kuito",
+                              "Mbanza Congo" ~ "MBanza Congo", 
+                              "N'harea" ~ "Nharea",
+                              "Tômbwa (Porto Alexandre)" ~ "Tombwa",
+                              .default = ADM2_EN))
+
+angola.shpfile_adm1 <- angola.shpfile_adm2 %>% 
+  group_by(ADM1_EN) %>% 
+  summarise(geometry = st_union(geometry))%>% 
+  mutate(ADM1_EN = str_replace_all(ADM1_EN,"-"," "))
+
+## ESWATINI
+eswatini.shpfile_adm1 <- st_read("DATA/ShapeFiles_Andres/swz_admbnda_adm1_CSO_2007.shp")
+
+eswatini.shpfile_grouped <- eswatini.shpfile_adm1 %>%
+  group_by(ADM0_EN) %>%
+  summarise(geometry = st_union(geometry)) %>% mutate(ADM1_EN = "Eswatini")
+
+## NAMIBIA
+namibia.shpfile_adm1<-st_read("DATA/ShapeFiles_Andres/nam_admbnda_adm1_nsa_ocha_20200109.shp")
+
+namibia.shpfile_grouped <- namibia.shpfile_adm1 %>% 
+  mutate(ADM1_EN = ifelse(ADM1_EN %in% c("Kavango East", "Kavango West"), "Kavango", ADM1_EN)) %>%
+  group_by(ADM1_EN) %>% 
+  summarise(geometry = st_union(geometry))
+
+
+
+## SOUTH AFRICA
+rsa.shpfile_adm1<-st_read("DATA/ShapeFiles_Andres/zaf_admbnda_adm1_sadb_ocha_20201109.shp")
+
+## ZAMBIA
+zambia.shpfile_adm2<-st_read("DATA/ShapeFiles_Andres/zmb_admbnda_adm2_dmmu_20201124.shp") %>% 
+  mutate(ADM2_EN = ifelse(ADM2_EN=="Chikankanta","Chikankata",ADM2_EN),
+         ADM2_EN = ifelse(ADM2_EN=="Milengi","Milenge",ADM2_EN),
+         ADM2_EN = ifelse(ADM2_EN=="Senga Hill","Senga",ADM2_EN),
+         ADM2_EN = ifelse(ADM2_EN=="Shiwamg'andu","Shiwang'andu",ADM2_EN))%>% 
+  mutate(ADM1_EN = ifelse(ADM2_EN=="Chirundu","Southern",ADM1_EN))
+
+zambia.shpfile_adm1 <- zambia.shpfile_adm2 %>% 
+  group_by(ADM1_EN) %>% 
+  summarise(geometry = st_union(geometry))%>% 
+  mutate(ADM1_EN = str_replace_all(ADM1_EN,"-"," "))
+
+
+ESA <- rbind(angola.shpfile_adm1 %>% dplyr::select(ADM1_EN, geometry), 
+             namibia.shpfile_grouped %>% dplyr::select(ADM1_EN, geometry), 
+             zambia.shpfile_adm1%>% dplyr::select(ADM1_EN, geometry), 
+             rsa.shpfile_adm1%>% dplyr::select(ADM1_EN, geometry), 
+             eswatini.shpfile_grouped%>% dplyr::select(ADM1_EN, geometry))
+
+
+metadata_admin_1 <- metadata %>% group_by(facility_province) %>% 
+  dplyr::summarize(n = n(), name = as.factor(min(facility_province))) %>%
+  left_join(country_key_map, by = join_by(facility_province == Provinces_Contained_SNPs))
+
+ESA_data <- merge(ESA, metadata_admin_1, by.x="ADM1_EN", by.y="Regions_ESA")
+
+```
+
+
+## Figure Graphing
+
+```{r Mapping CSP Max per Locus}
+
+map_africa <- function(dataset, col, name, by.x, by.y = "province_name", 
+                       legend_name = "Med. Edit Dist", color=NA){
+  merged <<- merge(dataset, ESA_data, by.x = by.x, by.y = by.y)
+  merged_graph <<- merged %>% 
+    group_by(!!rlang::sym(by.x)) %>% 
+    dplyr::summarize(VALUE = median(!!rlang::sym(col)),
+            geometry = dplyr::first(geometry))
+  plot <-  ggplot() + 
+    geom_sf(data=shpfile_africa, fill="grey") +
+    geom_sf(data = merged_graph, aes(fill=VALUE, geometry = geometry)) +
+    geom_sf(data=shpfile_africa, fill=NA, lwd = 1) +
+    coord_sf(ylim = c(0, -40), xlim = c(10, 45), expand = FALSE) +
+    ggtitle(name) + 
+    labs(fill = legend_name) +
+    theme_minimal()  + scale_fill_viridis_c(option="G")
+  return(plot)
+}
+
+if(PRINT_PLOTS){
+  map_3D7_em <- map_africa(freq.3D7, "freq", by.x="province", 
+                           by.y = "My_Regions", name="Phased 3D7 Frequency", legend_name = "Freq.")
+}
+
+
+#map_3D7_em_u5 <- map_africa(freq.3D7_u5, "freq", by.x="province", by.y = "My_Regions", name="Phased 3D7 Frequency (Under Age 5)", legend_name = "Freq.")
+#map_3D7_em_u5
+  
+#TODO apply a sample size filter
+```
+
+```{r Allele Frequency}
+##adding in phasing
+correct_seq <- paste(DV10, Th2R, Th3R, sep="")
+
+# TODO fix distances so that they're based on just seq 1 + seq 2
+
+malaria.em.COUNTRY.phasing <- read.csv("DATA/phasing_results/ALL_phasing_country_level_AA.csv") %>% 
+  mutate(pID = paste(gt_id, province)) %>% dplyr::select(-X, -gt_id, -id_col) %>%
+  filter(province != "Lunda Sul") %>%
+  pivot_wider(names_from = target_id, values_from = c(seq)) %>%
+  mutate(
+    AA_1 = `Pf3D7_03_v3-221463-221712-1B`,
+    AA_2 = `Pf3D7_03_v3-221295-221532-2`) %>%
+  rowwise() %>%
+  mutate(
+    distance1 =  adist(AA_1, V31B_amp)[1],
+    distance2 = adist(AA_2, V32_amp)[1],
+    total_distance = distance1 + distance2
+    ) %>% dplyr::select(-c(`Pf3D7_03_v3-221463-221712-1B`, `Pf3D7_03_v3-221295-221532-2`, pID, distance1, distance2)) %>%
+  mutate(DV10_col =  substring(AA_1, 293-281+offset + 1, 302 - 281+offset +1),
+         Th2R_col = substring(AA_1, 311-281+offset, 327 - 281+offset),
+         Th3R_col = substring(AA_2, 352-337+offset, 363-337+offset),
+         total_distance_epitopes = (adist(DV10_col, DV10) +
+                                      adist(Th2R_col, Th2R) +
+                                      adist(Th3R_col, Th3R)),
+         mutated_seqs = paste(
+           unlist(lapply(DV10_col, check_match, DV10)),
+           unlist(lapply(Th2R_col, check_match, Th2R)),
+           unlist(lapply(Th3R_col, check_match, Th3R)), sep = "   ")) %>%
+  mutate(avg = mean(freq)) %>%
+  group_by(mutated_seqs, province) %>%
+  summarize(freq = sum(freq), 
+            n_contribs = n(),
+            avg = sum(avg),
+            total_distance = mean(total_distance_epitopes))
+
+top_seqs <- malaria.em.COUNTRY.phasing %>% group_by(mutated_seqs) %>% summarize(median_freq = median (freq)) %>% slice_max(median_freq, n = 20)
+
+
+top_seqs_unfiltered <- malaria.em.COUNTRY.phasing %>% group_by(mutated_seqs) %>% summarize(median_freq = median (freq)) %>% arrange(median_freq)
+
+barplot2_data <- malaria.em.COUNTRY.phasing %>%
+     mutate(province = ifelse(province == "RSA", "South Africa", province),
+            avg = as.numeric(avg),
+            cat = case_when(total_distance == 0 ~ "c1",
+                            total_distance %in% c(1, 2, 3, 4) ~ "c2",
+                            total_distance %in% c(5, 6, 7) ~ "c3",
+                            total_distance %in% c(8, 9, 10) ~ "c4",
+                            total_distance >= 11 ~ "c5"),
+            cat = factor(cat, levels= c("c1", "c2", "c3", "c4", "c5"))) %>%  
+     group_by(province) %>% 
+     filter(mutated_seqs %in% top_seqs$mutated_seqs)
+
+barplot2_data_summary <- barplot2_data %>% group_by(province) %>% summarize(total_freq = sum(freq))
+barplot2_data_summary_seqs <- barplot2_data %>% group_by(mutated_seqs) %>% summarize(min_freq = min(freq),
+                                                                                     n_country = n())
+nrow(barplot2_data_summary_seqs %>% filter(n_country == 5,
+                                           min_freq >= 0.001))
+
+
+
+haplotype_agreement <- malaria.em.phasing_AA %>%
+  #filter(freq > 0.01) %>%
+  mutate(full_AA = paste0(AA_1, AA_2)) %>%
+  dplyr::select(province, freq, full_AA) %>%
+  pivot_wider(
+    names_from = province,
+    values_from = freq,
+    values_fill = 0
+  ) %>%
+  dplyr::select(-full_AA)  %>%
+  mutate_all(as.numeric) %>%
+  as.matrix() %>%
+  cor(method = "spearman")
+
+
+
+## fisher's exact test
+
+haplotype_agreement_chi2_L1 <- R.asv %>% filter(target_id == "Pf3D7_03_v3-221463-221712-1B") %>%
+  group_by(My_Regions, seq) %>% summarize(count = n())
+
+province_list <- unique(malaria.em.phasing_AA$province)
+haplotype_agreement_chi2_results_L1 = data.frame(p1 = c(), p2 = c(), chi2.p = c())
+for(p1 in province_list){
+  for(p2 in province_list){
+    d1 = haplotype_agreement_chi2_L1 %>% filter(My_Regions == p1)
+    d2 = haplotype_agreement_chi2_L1 %>% filter(My_Regions == p2)
+    d_full = full_join(d1, d2, by = c("seq", "My_Regions")) %>% 
+      mutate(count.x = replace_na(count.x, 0),
+             count.y = replace_na(count.y, 0))
+    test_table = cbind(d_full$count.x, d_full$count.y)
+    chi2 = chisq.test(test_table)
+    fisher = fisher.test(d_full$count.x, d_full$count.y, simulate.p.value = TRUE)
+    haplotype_agreement_chi2_results_L1 = 
+      rbind(haplotype_agreement_chi2_results_L1, c(p1, p2, chi2$p.value, fisher$p.val))
+  }
+}
+
+haplotype_agreement_chi2_L2 <- R.asv %>% filter(target_id == "Pf3D7_03_v3-221295-221532-2") %>%
+  group_by(My_Regions, seq) %>% summarize(count = n())
+
+haplotype_agreement_chi2_results_L2 = data.frame(p1 = c(), p2 = c(), chi2.p = c())
+for(p1 in province_list){
+  for(p2 in province_list){
+    d1 = haplotype_agreement_chi2_L2 %>% filter(My_Regions == p1)
+    d2 = haplotype_agreement_chi2_L2 %>% filter(My_Regions == p2)
+    d_full = full_join(d1, d2, by = c("seq", "My_Regions")) %>% 
+      mutate(count.x = replace_na(count.x, 0),
+             count.y = replace_na(count.y, 0))
+    test_table = cbind(d_full$count.x, d_full$count.y)
+    chi2 = chisq.test(test_table)
+    fisher = fisher.test(d_full$count.x, d_full$count.y, simulate.p.value = TRUE)
+    haplotype_agreement_chi2_results_L2 = rbind(haplotype_agreement_chi2_results_L2, c(p1, p2, chi2$p.value, fisher$p.val))
+  }
+}
+
+haplotype_agreement_results <- rbind(haplotype_agreement_chi2_results_L1 %>% mutate(target = "T1") %>%
+                                       setNames(c("p1", "p2", "chi2.pvalue", "fisher.pvalue", "target")),
+                                     haplotype_agreement_chi2_results_L2 %>% mutate(target = "T2") %>%
+                                       setNames(c("p1", "p2", "chi2.pvalue", "fisher.pvalue", "target"))) %>%
+  filter(p1 < p2) %>%
+  mutate(chi2.pvalue.adj = p.adjust(chi2.pvalue, method = "BH"),
+         fisher.pvalue.adj = p.adjust(fisher.pvalue, method = "BH")) %>%
+  mutate(Fisher.signif = fisher.pvalue.adj < 0.05)
+
+#   #filter(freq > 0.01) %>%
+#   mutate(full_AA = paste0(AA_1, AA_2)) %>%
+#   dplyr::select(province, freq, full_AA) %>%
+#   pivot_wider(
+#     names_from = province,
+#     values_from = freq,
+#     values_fill = 0
+#   ) %>%
+#   dplyr::select(-full_AA)  %>%
+#   mutate_all(as.numeric) %>%
+#   as.matrix() %>%
+#   cor(method = "spearman")
+# 
+# min(haplotype_agreement)
+# max(haplotype_agreement[lower.tri(haplotype_agreement)])
+# median(haplotype_agreement[lower.tri(haplotype_agreement)])
+# quantile(haplotype_agreement[lower.tri(haplotype_agreement)], c(0.25, 0.75))
+
+barplot2 <- ggplot(barplot2_data, aes(x=reorder(mutated_seqs, avg), y=freq)) + 
+  geom_bar(stat="identity", color="black", aes(fill = cat), show.legend = c(fill = T)) +
+  ggtitle("Top 20 Sequences") +
+  theme_classic2() +
+  theme(axis.text.y = element_text(family="mono"),
+        axis.title.y = element_text(size = 10),
+        axis.text.x  = element_text(angle=90, hjust=0.5, vjust=1)) + facet_wrap(~province, ncol = 5) +
+  xlab(NULL) + ylab("Frequency") + coord_flip() + scale_fill_brewer(drop = F, labels = c("0", "1-4", "5-7", "8-10", "11+"),
+                                           palette = "Purples",
+                                             name = "Edit Distance\nto 3D7")
+barplot2
+
+
+### finding country-level
+freq.3D7.country <- malaria.em.COUNTRY.phasing %>% filter(total_distance==0)
+
+ggsave("FIGURES/2b.png", width=9, height=6)
+
+FIGURE_2 <- (free(FIG_2A)) / barplot2 + 
+  plot_layout(tag_level = "new") +
+  plot_annotation(tag_levels = list(c("A", "", "", "", "", "B")))
+FIGURE_2
+ggsave(plot = FIGURE_2, filename = "FIGURES/FIG2_FINAL.png", width = 11, height = 12)
+
+
+
+freq.3D7.plot <- merge(freq.3D7, country_key_map, by.x = "province", by.y = "My_Regions")
+
+
+
+
+```
+
+
+```{r key snps}
+### Key SNP Positions 299, 301, 317, 354, 356, 359, and 361
+## TODO check that all Lunda Sul is removed
+
+## TODO fix weird NAs in figure 4B
+
+## TODO organize this code so it reads in from a datafile
+malaria.em.TOTAL.phasing <- read.csv("DATA/phasing_results/ALL_phasing_single_level_AA.csv") %>% 
+  mutate(pID = paste(gt_id, province)) %>% dplyr::select(-X, -gt_id, -id_col) %>%
+  pivot_wider(names_from = target_id, values_from = c(seq)) %>%
+  mutate(
+    AA_1 = `Pf3D7_03_v3-221463-221712-1B`,
+    AA_2 = `Pf3D7_03_v3-221295-221532-2`) %>%
+  rowwise() %>%
+  mutate(
+    distance1 =  adist(AA_1, V31B_amp)[1],
+    distance2 = adist(AA_2, V32_amp)[1],
+    total_distance = distance1 + distance2
+    ) %>% dplyr::select(-c(`Pf3D7_03_v3-221463-221712-1B`, `Pf3D7_03_v3-221295-221532-2`, pID, distance1, distance2)) %>%
+  mutate(DV10_col =  substring(AA_1, 293-281+offset+1, 302 - 281+offset+1),
+         Th2R_col = substring(AA_1, 311-281+offset, 327 - 281+offset),
+         Th3R_col = substring(AA_2, 352-337+offset, 363-337+offset),
+         mutated_seq_DV10 = unlist(lapply(DV10_col, check_match, DV10)),
+         mutated_seq_Th2R = unlist(lapply(Th2R_col, check_match, Th2R)),
+         mutated_seq_Th3R = unlist(lapply(Th3R_col, check_match, Th3R)),
+         mutated_seqs = paste(mutated_seq_DV10, mutated_seq_Th2R, mutated_seq_Th3R, sep = "   ")) %>%
+  mutate(avg = mean(freq))
+
+### Key SNP Positions 299, 301, 317, 354, 356, 359, and 361
+
+## 299 + 301 are in DV10
+
+## 317 in Th2R
+
+## 354, 356, 359, 361 in Th3R
+
+neafsey_match <- function(mutated_seq, target){
+  if(target == "DV10"){
+    key_sites = c(299, 301)
+    start = 294
+    end = 303
+  }
+  
+  if(target == "Th2R"){
+    key_sites = c(317)
+    start = 311
+    end = 327
+  }
+  
+  if(target == "Th3R"){
+    key_sites = c(354, 356, 359, 361)
+    start = 352
+    end = 363
+  }
+  ret = ""
+  for(ix in seq(start, end)){
+    if(ix %in% key_sites){
+      add_char = substring(mutated_seq, ix-start+1, ix-start+1)
+      if(target == "DV10"){
+        print(add_char)
+      }
+      ret = paste0(ret, add_char)
+    }
+    else{ret = paste0(ret, ".")}
+  }
+  return(ret)
+}
+malaria.em.TOTAL.phasing  <- malaria.em.TOTAL.phasing %>% mutate(mutated_seq_DV10.neafsey = 
+                                      unlist(lapply(mutated_seq_DV10, neafsey_match, "DV10")),
+         mutated_seq_Th2R.neafsey = 
+                                      unlist(lapply(mutated_seq_Th2R, neafsey_match, "Th2R")),
+         mutated_seq_Th3R.neafsey = 
+                                      unlist(lapply(mutated_seq_Th3R, neafsey_match, "Th3R"))) %>%
+  mutate(mutated_seqs.neafsey = paste(mutated_seq_DV10.neafsey, mutated_seq_Th2R.neafsey, mutated_seq_Th3R.neafsey, sep = "   ")) %>%
+  mutate(neafsey_distance = (nchar(paste0(DV10, Th2R, Th3R))) -
+           str_count(mutated_seqs.neafsey, "_") - # remove matching
+           str_count(mutated_seqs.neafsey, "\\.")) # remove irrelevant
+
+malaria.em.TOTAL.phasing.plottable <- malaria.em.TOTAL.phasing %>% group_by(mutated_seqs.neafsey) %>%
+  summarize(`Total Frequency` = sum(freq),
+            neafsey_distance = min(neafsey_distance))
+
+ggplot(malaria.em.TOTAL.phasing.plottable, aes(x = neafsey_distance, 
+                                               y = `Total Frequency`, fill = mutated_seqs.neafsey)) +
+  geom_bar(stat = "identity", position = "stack") +
+  theme_classic2() +
+  theme(legend.text  = element_text(family="mono"))+
+  ggtitle("Number of SNPs Associated with Decreased Efficacy (Neafsey et al., 2017)") + ylab("Frequency") 
+
+
+a <- ggplot(malaria.em.TOTAL.phasing.plottable, aes(x = neafsey_distance, 
+                                               y = `Total Frequency`)) +
+  geom_bar(stat = "identity", position = "stack", fill = "black", color = "black") +
+  theme_classic2() +
+  theme(legend.text  = element_text(family="mono"))+
+  ggtitle("AA Mutations Associated with Decreased Efficacy (Neafsey et al., 2017)") + ylab("Frequency") +
+  xlab("Number of AA Mutations")
+
+neafsey_locations = c(299, 301, 317, 354, 356, 359, 361)
+b <- ggplot(both_amplicons %>% filter(codon_numeric %in% neafsey_locations), aes(x = codon_numeric, y = freq, fill = cleaned_AA)) + geom_bar(stat = "identity") + 
+  ggtitle("Mutations in CSP C-Terminus") +
+  ggplot2::annotate("rect",xmin = 293,xmax = 302, ymin = 1.01, ymax = 1.04, fill = "darkblue") +
+  geom_line(data = data.frame(target = c("DV10", "Th2R", "Th3R"), cleaned_AA = c(NA,NA,NA),
+                              freq = c(0, 0, 0),
+                              codon_numeric = c(352, 352, 352)), aes(color = target)) + 
+  ggplot2::annotate("rect", xmin = 311, xmax = 327, ymin = 1.01, ymax = 1.04, fill = "turquoise4") +
+  ggplot2::annotate("rect", xmin = 352, xmax = 363, ymin = 1.01, ymax = 1.04, fill = "yellowgreen") +
+  scale_color_manual(values = c("DV10" = "darkblue",
+                               "Th2R" = "turquoise4",
+                               "Th3R" = "yellowgreen")) +
+  xlab("Codon Index") + 
+  ylab("Dcifer-Estimated Population Frequency") +
+  labs(fill = "Mutations", color = "Epitope")
+
+## 299 + 301 are in DV10
+
+## 317 in Th2R
+
+## 354, 356, 359, 361 in Th3R
+
+a/b
+
+## TODO make a part B to this figure with the References + non-reference alleles
+ggsave("FIGURES/neafsey_comparison.png")
+```
+
+## Heterozygosity
+
+Heterozygosity = (n/n-1)(1-sum(p^2))
+n = number of samples
+p = allele frequency of each allele
+
+```{r heterozygosity}
+## MALARIA EM MAIN FIGURE
+### what are the "real N" needs to be calculated AFTER phasing
+sample_size <- read.csv("DATA/phasing_results/malaria.em.size_AA.csv")
+
+HE.malaria.em <- malaria.em.phasing_AA %>% group_by(province) %>% left_join(sample_size, by = join_by(province==My_Regions)) %>%
+  summarise(n = mean(final_size),
+         p2sum = sum(freq**2),
+         He = (n/(n-1))*(1-p2sum))
+
+
+if(PRINT_PLOTS){
+  He <- map_africa(HE.malaria.em, "He", "Expected Heterozygosity", "province", by.y = "My_Regions", legend_name = "Expected \nHeterozygosity")
+
+He.check <- map_africa(HE.malaria.em %>% mutate(high_het = He > 0.97), "high_het", "Expected Heterozygosity", "province", by.y = "My_Regions", legend_name = "Expected \nHeterozygosity")
+
+He_final <- He & scale_fill_viridis_c(option="A", direction = -1)
+  
+}
+
+
+cat("The mean He is", mean(HE.malaria.em$He), "with an SD of", sd(HE.malaria.em$He))
+#He_final
+```
+
+_+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Source for this calc: https://bios1140.github.io/understanding-fst-the-fixation-index.html
+
+F = (Ht - Hs) / (Ht)
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+For simplicity, imagine we are examining two populations only. With this formula,  
+Ht is the expected heterozygosity when the two populations are considered as one large meta-population.  
+Hs is the average expected heterozygosity in the two populations.
+
+```{r FST}
+
+
+### very similar to calculating He
+
+Fst <- data.frame(p1 = c(), p2 = c(), val = c())
+for(p1 in province_list){
+  for(p2 in province_list){
+    full_pop <- malaria.em.phasing_AA %>% filter(province %in% c(p1, p2))
+    cat("p1", p1, "p2", p2)
+    ns <- sample_size %>% filter(My_Regions %in% c(p1, p2))
+    print(nrow(ns))
+    ns <- sum(ns$final_size)
+    full_pop <- full_pop %>% group_by(AA_1, AA_2, .groups = 'keep') %>% dplyr::summarize(
+      freq = ifelse(nrow(.)==2, mean(freq), mean(freq)/n_distinct(province))
+    )
+    summary <- full_pop %>% group_by(TRUE) %>% dplyr::summarize(
+         p2sum = sum(freq**2),
+         He = (ns / (ns-1))*(1-p2sum))
+    val <- summary$He
+    Fst <- rbind(Fst, c(p1, p2, val))
+    #print(full_pop)
+    #exit
+  }
+}
+
+colnames(Fst) <- c("p1", "p2", "Ht")
+
+
+# Make relatedness heatmap ---------------------------------------------
+province_order <- c(
+  "Zaire",
+  "Uíge",
+  "Benguela",
+  "Namibe",
+  "Bié",
+  "Lunda Sul",
+  "Moxico",
+  "Cuando Cubango",
+  "Omusati Region",
+  "Ohangwena Region",
+  "Kavango",
+  "Zambezi Region",
+  "North Western Province",
+  "Western Province",
+  "Copperbelt Province",
+  "Luapula Province",
+  "Northern Province",
+  "Central Province",
+  "Muchinga Province",
+  "Southern Province",
+  "Lusaka Province",
+  "Eastern Province",
+  "Niassa",
+  "Cabo Delgado",
+  "Tete",
+  "Nampula",
+  "Zambezia",
+  "Manica",
+  "Sofala",
+  "Gaza",
+  "Inhambane",
+  "Maputo",
+  "Limpopo",
+  "Mpumalanga",
+  "KwaZulu-Natal",
+  "Eswatini"
+)
+
+country_order <- c("Angola", "Namibia", "Zambia", "South Africa", "Eswatini")
+Fst <- Fst %>%
+  mutate(
+    p1 = factor(p1, province_order, ordered = TRUE),
+    p2 = factor(p2, province_order, ordered = TRUE)
+    
+  ) 
+
+Fst1 <- Fst %>% left_join(HE.malaria.em %>% dplyr::select(province, He), by = join_by(p1 == province)) %>% 
+  dplyr::rename(He1 = He) %>%
+  left_join(HE.malaria.em %>% dplyr::select(province, He), by = join_by(p2 == province)) %>% 
+  dplyr::rename(He2 = He) %>%
+  left_join(country_key_map %>% dplyr::select(My_Regions, p1_country = COUNTRY), by = join_by(p1 == My_Regions)) %>%
+  left_join(country_key_map %>% dplyr::select(My_Regions, p2_country = COUNTRY), by = join_by(p2 == My_Regions)) %>%
+  mutate(Ht = as.numeric(Ht)) %>%
+  mutate(Hs = (He1 + He2) / 2,
+         Fst = ((Ht - Hs) / Ht),
+         p1_country = factor(p1_country, country_order, ordered = TRUE),
+         p2_country = factor(p2_country, rev(country_order), ordered = TRUE))
+
+ggplot(Fst1 %>% filter(!(p1 %in% c("Kavango", "Omusati Region")),
+                       !(p2 %in% c("Kavango", "Omusati Region"))), aes(x =p1, y = p2, fill = Fst)) + geom_tile() + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) + xlab(NULL) + ylab(NULL) + 
+  facet_grid(p2_country~p1_country, scales = "free", space = "free")
+ggsave("FIGURES/Supplemental/FST.png", height = 7, width = 11)
+
+# ggplot(Fst1, aes(x = p1, y = p2, fill = Fst)) + geom_tile() + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+# 
+# 
+# ggplot(Fst1 %>% filter(!(p1 %in% c("Kavango", "Omusati Region")),
+#                        !(p2 %in% c("Kavango", "Omusati Region")),
+#                        p1 != p2), aes(x = Fst)) + geom_density() + theme_bw() + ggtitle("Density of FST Values (n > 30)")
+
+```
+
+```{r n samples}
+
+incidence <- read.csv("/Users/gotthold/JHU - OneDrive/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/Country Case Counts/Country Overall Cases/DRAFT_PROVINCE_INCIDENCE_V2.csv")
+
+
+if(PRINT_PLOTS){
+    incidence_map <- map_africa(incidence, col = "incidence_per_1000", "
+                                Incidence per 1000 at Risk", legend_name = "Incidence/1000", 
+             by.x = "province_name", 
+             by.y = "incidence_name") #TODO
+  
+  incidence_map_final <- incidence_map & scale_fill_gradient(low = "white", high = "slateblue4")
+  incidence_map_final
+}
+
+
+```
+
+
+```{r correlation}
+
+
+#het is He
+#freq.3D7
+#incidence <- read.csv("C:/Users/zgottho2/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/Country Case Counts/incidence DRAFT.csv") %>%
+#incidence <- read.csv("C:/Users/zoeor/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/Country Case Counts/incidence DRAFT.csv") %>% 
+#incidence <- read.csv("C:/Users/zgottho2/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/Country Case Counts/incidence DRAFT.csv") %>%
+
+#  group_by(province_name) %>% 
+#  dplyr::summarize(cases = sum(cases),
+ #           population = sum(total_pop),
+ #           incidence = cases / population) %>% left_join(country_key_map, by=join_by(province_name==incidence_name)) %>%
+ # filter(!is.na(Regions_ESA))
+
+#incidence <- read.csv("C:/Users/zgottho2/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/Country Case Counts/Country Overall Cases/DRAFT_PROVINCE_INCIDENCE.csv")  %>% mutate(
+
+cor <- HE.malaria.em %>% left_join(freq.3D7) %>%
+  mutate(freq = replace_na(freq, 0)) %>%
+  left_join(incidence, by = join_by(province == province_name))
+
+## TODO FIX WHATEVER IS GOING ON HERE
+
+## TODO fix up Moxico Leste
+#lm.df <- merge(cor, incidence, by.x = "province", by.y="My_Regions")
+
+### adding in COI and %polyclonal
+#COI_table <- COI_table %>% filter(specimen_id %in% R.asv$FieldID)
+coi_provinces <- COI_table %>% left_join(metadata, by = join_by(specimen_id == form.participant_id)) %>% 
+  #left_join(country_key_map, by = join_by(facility_province == Provinces_Contained_Metadata))%>%
+  group_by(My_Regions) %>% dplyr::summarize(mean_coi = mean(coi),
+                                        per_poly = sum(coi==1)/n(),
+                                        total_coi = sum(coi))
+
+lm.df <- lm.df %>% left_join(coi_provinces, by = join_by(province == My_Regions))
+
+lm.df <- lm.df %>% dplyr::select(-Provinces_Contained_SNPs)%>% distinct()
+
+
+lm.test <- lm(data = lm.df %>% filter(province != "Southern Province"), freq ~ He * incidence)
+lm.test %>% tbl_regression()
+lm.df.long <- pivot_longer(lm.df, cols = c(He, incidence))
+lm.df.long <- lm.df.long %>% mutate(
+  name = ifelse(name == "He", "Expected Heterozygosity", "Malaria Incidence")
+)
+library(ggnewscale)
+size = 3
+scatterplot1 <- ggplot(lm.df, aes(x = incidence, y = freq)) + 
+  geom_point(data = . %>% filter(COUNTRY == "Angola"), shape = 1, aes(color = province), size = size) +
+  labs(color = "Angola") +
+  guides(color = guide_legend(ncol = 2)) +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "Eswatini"), shape = 2, aes(color = province), size = size) +
+  labs(color = "Eswatini") +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "Namibia"), shape = 15, aes(color = province), size = size) +
+  labs(color = "Namibia") +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "RSA"), shape = 8, aes(color = province), size = size) +
+  labs(color = "RSA") +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "Zambia"), shape = 17, aes(color = province), , size = size) +
+  labs(color = "Zambia") +
+
+  #geom_point(aes(color = province, shape = COUNTRY)) + 
+  stat_poly_line(color = "deeppink", linetype="dashed", se = F) + stat_poly_eq(color = "deeppink") +
+  stat_poly_line(data = . %>% filter(province != "Southern Province"), color = "black", se = F) + 
+  stat_poly_eq(data = . %>% filter(province != "Southern Province"),
+               color = "black",
+               label.y = c(0.92, 0.92)) +
+  theme_bw()  + ylab("Frequency of 3D7") +
+  xlab("Incidence per 1000 at Risk") +
+  guides(color = guide_legend(ncol = 2)) 
+
+scatterplot2 <- ggplot(lm.df, aes(x = He, y = freq)) + 
+  geom_point(data = . %>% filter(COUNTRY == "Angola"), shape = 1, aes(color = province), size = size) +
+  labs(color = "Angola") +
+  guides(color = guide_legend(ncol = 2)) +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "Eswatini"), shape = 2, aes(color = province), size = size) +
+  labs(color = "Eswatini") +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "Namibia"), shape = 15, aes(color = province), size = size) +
+  labs(color = "Namibia") +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "RSA"), shape = 8, aes(color = province), size = size) +
+  labs(color = "RSA") +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "Zambia"), shape = 17, aes(color = province), , size = size) +
+  labs(color = "Zambia") +
+
+  #geom_point(aes(color = province, shape = COUNTRY)) + 
+  stat_poly_line(color = "deeppink", linetype="dashed", se = F) + stat_poly_eq(color = "deeppink",
+                                                                              formula = y ~x) +
+  stat_poly_line(data = . %>% filter(province != "Southern Province"), color = "black", se = F) + 
+  stat_poly_eq(data = . %>% filter(province != "Southern Province"),
+              color = "black",
+              label.y = c(0.92, 0.92)) +
+  theme_bw() + ylab("Frequency of 3D7") +
+  xlab("Expected Heterozygosity") +
+  guides(color = guide_legend(ncol = 2)) 
+
+
+scatterplot3 <- ggplot(lm.df, aes(x = mean_coi, y = freq)) + 
+  geom_point(data = . %>% filter(COUNTRY == "Angola"), shape = 1, aes(color = province), size = size) +
+  labs(color = "Angola") +
+  guides(color = guide_legend(ncol = 2)) +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "Eswatini"), shape = 2, aes(color = province), size = size) +
+  labs(color = "Eswatini") +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "Namibia"), shape = 15, aes(color = province), size = size) +
+  labs(color = "Namibia") +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "RSA"), shape = 8, aes(color = province), size = size) +
+  labs(color = "RSA") +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "Zambia"), shape = 17, aes(color = province), , size = size) +
+  labs(color = "Zambia") +
+
+  #geom_point(aes(color = province, shape = COUNTRY)) + 
+  stat_poly_line(color = "deeppink", linetype="dashed", se = F) + stat_poly_eq(color = "deeppink") +
+  stat_poly_line(data = . %>% filter(province != "Southern Province"), color = "black", se = F) + 
+  stat_poly_eq(data = . %>% filter(province != "Southern Province"),
+               color = "black",
+               label.y = c(0.92, 0.92)) +
+  theme_bw() + ylab("Frequency of 3D7") +
+  xlab("Mean COI") +
+  guides(color = guide_legend(ncol = 2)) 
+
+
+scatterplot4 <- ggplot(lm.df, aes(x = per_poly, y = freq)) + 
+  geom_point(data = . %>% filter(COUNTRY == "Angola"), shape = 1, aes(color = province), size = size) +
+  labs(color = "Angola") +
+  guides(color = guide_legend(ncol = 2)) +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "Eswatini"), shape = 2, aes(color = province), size = size) +
+  labs(color = "Eswatini") +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "Namibia"), shape = 15, aes(color = province), size = size) +
+  labs(color = "Namibia") +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "RSA"), shape = 8, aes(color = province), size = size) +
+  labs(color = "RSA") +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "Zambia"), shape = 17, aes(color = province), , size = size) +
+  labs(color = "Zambia") +
+
+  #geom_point(aes(color = province, shape = COUNTRY)) + 
+  stat_poly_line(color = "deeppink", linetype="dashed", se = F) + stat_poly_eq(color = "deeppink") +
+  stat_poly_line(data = . %>% filter(province != "Southern Province"), color = "black", se = F) + 
+  stat_poly_eq(data = . %>% filter(province != "Southern Province"),
+               color = "black",
+               label.y = c(0.92, 0.92)) +
+  theme_bw() + ylab("Frequency of 3D7") +
+  xlab("Percent Polyclonal") +
+  guides(color = guide_legend(ncol = 2)) 
+
+scatterplot1 + scatterplot2 + scatterplot3 + scatterplot4 + plot_layout(guides = "collect")
+ggsave("FIGURES/Supplemental/phased/scatterplot_fig1.png", height = 10, width = 11)
+
+print("Is there a significant correlation between the ")
+cor.test(cor$He, cor$freq, method = "spearman")
+
+cor.test(cor$incidence_per_1000, cor$freq, method = "spearman")
+
+```
+
+
+
+
+```{r pcoa}
+library(vegan)
+#generating pcoa matrix
+pcoa_matrix <- malaria.em.phasing_AA %>%
+  mutate(AA = paste(AA_1, AA_2, sep = "")) %>%
+  dplyr::select(-c(AA_1, AA_2, total_distance)) %>%
+  mutate(freq = as.numeric(tidyr::replace_na(freq, 0))) %>%
+  pivot_wider(names_from = province, values_from = freq, id_cols = AA) %>%
+  dplyr::select(-AA) %>%
+  replace(is.na(.), 0) %>%
+  t() %>% as.matrix() 
+
+#TEST <- pcoa_matrix %>% group_by(AA, province) %>% summarize(n = n())
+
+library(ape)
+pcoa_distance <- vegdist(pcoa_matrix, method = "bray")
+res <- pcoa(pcoa_distance)
+res$values
+biplot(res)
+
+
+
+
+### calculating centroids
+ESA_centroids <- ESA_data %>%
+  mutate(centroid = st_centroid(geometry),
+         lat = st_coordinates(centroid)[,2],
+         long = st_coordinates(centroid)[,1])
+pcoa_graph <- res$vectors %>% as.data.frame()
+#adding in lat/long data
+pcoa_graph <- pcoa_graph %>%
+  mutate(My_Regions = row.names(.)) %>%
+  left_join(ESA_centroids, by = join_by(My_Regions)) %>%
+  dplyr::select(-c(n, name, facility_province, Provinces_Contained_Metadata)) %>%
+  distinct()
+  
+
+
+
+scatterplot1 <- ggplot(lm.df, aes(x = incidence, y = freq)) + 
+  geom_point(data = . %>% filter(COUNTRY == "Angola"), shape = 1, aes(color = province), size = size) +
+  labs(color = "Angola") +
+  guides(color = guide_legend(ncol = 2)) +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "Eswatini"), shape = 2, aes(color = province), size = size) +
+  labs(color = "Eswatini") +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "Namibia"), shape = 15, aes(color = province), size = size) +
+  labs(color = "Namibia") +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "RSA"), shape = 8, aes(color = province), size = size) +
+  labs(color = "RSA") +
+  new_scale_color() +
+  geom_point(data = . %>% filter(COUNTRY == "Zambia"), shape = 17, aes(color = province), , size = size) +
+  labs(color = "Zambia") 
+
+library(ggrepel)
+pcoa_graph <- pcoa_graph %>% left_join(country_key_map %>% dplyr::select(My_Regions, LABEL_ABB) %>% distinct(), by = join_by(My_Regions)) 
+main_pcoa_graph <- ggplot(pcoa_graph, aes(x = Axis.2, y = -Axis.1, label = LABEL_ABB.x)) + 
+  geom_point(shape = 21, aes(fill = COUNTRY), color = "black", size = 2) +
+  geom_text_repel() + theme_bw() + scale_fill_brewer(palette = "Set2") + theme(legend.justification = "bottom")
+main_pcoa_graph
+
+merged_graph_abb <- country_key_map %>% dplyr::select(ABB, LABEL_ABB, My_Regions) %>% distinct() %>%
+  left_join(ESA_centroids %>% dplyr::select(My_Regions, COUNTRY, geometry, long, lat) %>% distinct(), by = join_by(My_Regions))
+
+province_abb_map <-  ggplot() + 
+  geom_sf(data=shpfile_africa, fill="lightgrey") +
+  geom_sf(data = merged_graph_abb, aes(fill=COUNTRY, geometry = geometry)) +
+  geom_sf(data=shpfile_africa, fill=NA, lwd = 0.5) +
+  coord_sf(ylim = c(-5, -33), xlim = c(10, 37), expand = FALSE) +
+  geom_text(data = merged_graph_abb, aes(label = ABB, x = long, y = lat), size = 3) +
+  theme_minimal() + xlab(NULL) + ylab(NULL) + 
+  theme(legend.position = "none",
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(), 
+        panel.grid = element_blank(),
+        #panel.border = element_rect(colour = "grey", fill=NA, linewidth=1),
+        panel.background =  element_rect(fill = 'lightblue', color = 'grey')) +
+  scale_fill_brewer(palette = "Set2") #+ theme(legend.justification = "bottom")
+if(PRINT_PLOTS){
+    main_pcoa_graph + #province_abb_map #
+      inset_element(province_abb_map, 0.65, 0.40, 1.05, 1.00, align_to = "full")
+    ggsave("FIGURES/pcoa_graph.png", height = 7, width = 10)
+  
+}
+
+
+### lm comparison with other values
+### other values from "lm.df" 
+## TODO include COI (% poly and mean COI)
+
+pcoa_graph <- pcoa_graph %>% left_join(lm.df %>% distinct(province_name, incidence, He), 
+                                       by = join_by(My_Regions == province_name))
+
+lm.PC1 <- lm(Axis.1 ~ lat + long + incidence + He, data = pcoa_graph)
+table.PC1 <- tbl_regression(lm.PC1) %>%  bold_p(t = 0.05, q = FALSE)
+
+lm.PC2 <- lm(Axis.2 ~ lat + long + incidence + He, data = pcoa_graph)
+table.PC2 <- tbl_regression(lm.PC2) %>%  bold_p(t = 0.05, q = FALSE)
+
+tables <- tbl_merge(list(table.PC1, table.PC2)) 
+tables 
+
+```
+
+
+
+
+
+```{r final}
+ESA_centroids_group <- ESA_centroids %>% group_by(lat, long) %>% dplyr::summarize(n = sum(n)) 
+cat("Total samples over", nrow(ESA_centroids_group), "provinces is", sum(ESA_centroids_group$n), "samples")
+
+fig1a <- ggplot() + 
+  geom_sf(data=shpfile_africa, fill="grey") +
+  geom_sf(data = ESA_data, aes(fill=n, geometry = geometry)) +
+  geom_sf(data=shpfile_africa, fill=NA, lwd = 1) +
+  coord_sf(ylim = c(0, -40), xlim = c(10, 45), expand = FALSE) +
+  ggtitle("Number of Samples") + 
+  labs(fill = "N") +
+  xlab(NULL) +
+  ylab(NULL) +
+  geom_label_repel(aes(label = n, x = long, y = lat), data = ESA_centroids_group) + 
+  theme_minimal()  + scale_fill_viridis_c(option="G")
+
+if(PRINT_PLOTS){
+  fig1a
+}
+
+
+#incidence_map_final + He_final + map_3D7_em + plot_annotation(tag_levels = 'A')
+
+#ggsave("FIGURES/Fig1.png", height = 8, width = 14)
+
+```
+
+
+
+
+# Connectivity
+
+To determine if the high frequency of 3D7 in Southern Province was the result of sample connectivity, we measured the con....
+
+
+## Generating Dataframes
+
+```{r connectivity}
+R.asv <- read.csv("DATA/ExportAllelesCSP_ASV.txt", sep="\t")
+#metadata <- read.csv("specimen_metadata.tsv", sep="\t")
+R.asv <- merge(R.asv, metadata, by.x="FieldID", by.y="form.participant_id")
+
+library(dcifer)
+
+#COI_table <- read.csv("coi_table.tsv", sep = "\t")
+#COI_table$coi <- as.numeric(COI_table$coi)
+
+#281 to 343
+V31B_amp = "QGHNMPNDPNRNVDENANANSAVKNNNNEEPSDKHIKEYLNKIQNSLSTEWSPCSVTCGNGIQ"
+DV10 = substring(V31B_amp, 293-281+1, 302 - 281+1)
+Th2R = substring(V31B_amp, 311-281+1, 327 - 281+1)
+
+#337 to 396
+V32_amp = "TCGNGIQVRIKPGSANKPKDELDYANDIEKKICKMEKCSSVFNVVNSSIGLIMVLSFLFL"
+Th3R = substring(V32_amp, 352-337+1, 363-337+1)
+
+#checked for accuracy!
+csp.Th2R=R.asv %>% 
+  filter(Locus=="Pf3D7_03_v3-221463-221712-1B") %>% 
+  dplyr::select(FieldID, Locus,ASV) %>% 
+  distinct() %>% 
+  mutate(ASV_fixed=str_replace_all(ASV,"CAGCAATTGTTGGCA","CAGCATTGTTGGCA"),
+         region = "Th2R")%>%  # replace insertion observed in 1 ASV
+  mutate(ASV_cropped = substr(ASV_fixed,3,193-2), # get rid of partial codons at beginning and end of ASV
+         AA = as.character(Biostrings::translate(Biostrings::reverseComplement(DNAStringSet(ASV_cropped)))), #translate full ASV
+         AA_cropped = substring(AA, 311-281+1, 327 - 281+1),
+         first_codon = 311,
+         last_codon = 327) %>% 
+  rowwise() %>% 
+  mutate(distance = adist(AA_cropped, Th2R)[1],
+         distance_prop = distance/nchar(Th2R)
+         )
+
+#checked for accuracy (slack message)
+csp.DV10=R.asv %>% 
+  filter(Locus=="Pf3D7_03_v3-221463-221712-1B") %>% 
+  dplyr::select(FieldID, Locus,ASV) %>% 
+  distinct() %>% 
+  mutate(ASV_fixed=str_replace_all(ASV,"CAGCAATTGTTGGCA","CAGCATTGTTGGCA"),
+         region = "DV10")%>%  # replace insertion observed in 1 ASV
+  mutate(ASV_cropped = substr(ASV_fixed,3,193-2), # get rid of partial codons at beginning and end of ASV
+         AA = as.character(Biostrings::translate(reverseComplement(DNAStringSet(ASV_cropped)))), #translate full ASV
+         AA_cropped = substring(AA, 293-281+1, 302 - 281+1),
+         first_codon = 293,
+         last_codon = 302) %>% 
+  rowwise() %>% 
+  mutate(distance = adist(AA_cropped, DV10)[1],
+         distance_prop = distance/nchar(DV10)
+         )
+
+#checked for accuracy
+csp.Th3R=R.asv %>% 
+  filter(Locus=="Pf3D7_03_v3-221295-221532-2") %>% 
+  dplyr::select(FieldID, Locus,ASV) %>% 
+  distinct() %>% 
+  mutate(ASV_fixed=ASV,
+         region = "Th3R")%>%  # no fix needed for this amplicon
+  mutate(ASV_cropped = substr(ASV_fixed,1,182-2),
+         AA = as.character(Biostrings::translate(reverseComplement(DNAStringSet(ASV_cropped)))),
+         AA_cropped = substring(AA, 352-337+1, 363-337+1),
+         first_codon = 352,
+         last_codon = 363)%>% 
+  rowwise() %>% 
+  mutate(distance = adist(AA_cropped, Th3R)[1],
+         distance_prop = distance/nchar(Th3R)
+  )
+
+#AA_2 <- merge(csp.DV10, csp.Th2R, by="FieldID", suffixes = c(".DV10", ".Th2R"))
+#AA_2 <- merge(AA_2, csp.Th3R, by="FieldID", suffixes = c("", ".Th3R"))
+
+csp.translated_1b <- rbind(csp.DV10, csp.Th2R) %>% merge(R.asv%>% 
+  filter(Locus=="Pf3D7_03_v3-221463-221712-1B"), by=c("FieldID", "ASV"))
+
+csp.translated2 <- csp.Th3R %>% merge(R.asv%>%filter(Locus=="Pf3D7_03_v3-221295-221532-2"), by = c("FieldID", "ASV"))
+  
+csp.translated <- rbind(csp.translated_1b, csp.translated2)
+
+
+csp.max.per.locus=csp.translated %>%
+  group_by(FieldID,region) %>% 
+  filter(Reads>5,Reads/sum(Reads)>0.01) %>% 
+  group_by(FieldID) %>% 
+  filter(n_distinct(region)==3) %>% 
+  group_by(FieldID,region) %>% 
+  dplyr::summarize(m = max(distance))
+
+
+csp.locus=csp.translated %>%
+  group_by(FieldID,region) %>% 
+  filter(Reads>5,Reads/sum(Reads)>0.01) %>% 
+  group_by(FieldID) %>% 
+  filter(n_distinct(region)==3) 
+
+### NEED TO FIX CSP.LOCUS doesn't exist in this version
+csp.locus <- merge(csp.locus, COI_table, by.x = "FieldID", by.y="specimen_id")
+perfect_prevalence <- merge(csp.locus, country_key_map, by.x="facility_province", by.y="Provinces_Contained_Metadata")
+
+contains_3D7 <- perfect_prevalence %>% group_by(FieldID, region) %>%
+  dplyr::summarise(contains_3D7 = ifelse(min(distance)==0, TRUE, FALSE),
+            only_3D7 = ifelse(max(distance)==0, TRUE, FALSE))
+
+csp.L1=R.asv %>% 
+  filter(Locus=="Pf3D7_03_v3-221463-221712-1B") %>% 
+  dplyr::select(FieldID, Locus,ASV) %>% 
+  distinct() %>% 
+  mutate(ASV_fixed=str_replace_all(ASV,"CAGCAATTGTTGGCA","CAGCATTGTTGGCA"),
+         region = "Locus 1")%>%  # replace insertion observed in 1 ASV
+  mutate(ASV_cropped = substr(ASV_fixed,3,193-2), # get rid of partial codons at beginning and end of ASV
+         AA = as.character(Biostrings::translate(reverseComplement(DNAStringSet(ASV_cropped)))), #translate full ASV
+  ) %>% 
+  rowwise() %>% 
+  mutate(distance = adist(AA, V31B_amp)[1]
+  )
+
+
+csp.L2=R.asv %>% 
+  filter(Locus=="Pf3D7_03_v3-221295-221532-2") %>% 
+  dplyr::select(FieldID, Locus,ASV) %>% 
+  distinct() %>% 
+  mutate(ASV_fixed=ASV,
+         region = "Th3R")%>%  # no fix needed for this amplicon
+  mutate(ASV_cropped = substr(ASV_fixed,1,182-2),
+         AA = as.character(Biostrings::translate(reverseComplement(DNAStringSet(ASV_cropped)))))%>% 
+  rowwise() %>% 
+  mutate(distance = adist(AA, V32_amp)[1],
+  )
+
+contains_3D7_bothloci <- rbind(csp.L1, csp.L2) %>%
+  group_by(FieldID) %>%
+  dplyr::summarize(contains_3D7 = ifelse(min(distance)==0, TRUE, FALSE),
+            only_3D7 = ifelse(max(distance)==0, TRUE, FALSE))
+
+write.csv(contains_3D7_bothloci, "DATA/Connectivity/contains_3D7_bothloci.csv")
+```
+
+## Cluster Analysis - Alfred Hubbard
+
+```{r out.width = "100%"}
+library(ggraph)
+library(tidygraph)
+#setwd("C:/Users/zoeor/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/CSP PAPER/DATA/Connectivity/")
+setwd("/Users/gotthold/JHU - OneDrive/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/CSP PAPER/DATA/Connectivity/")
+#setwd("C:/Users/zgottho2/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/CSP project/Connectivity/")
+theme_set(theme_bw())
+set.seed(1)
+
+inp <- list(
+    sample_network = 
+      #"rnull_0_25/sample_network.rds", 
+      "sample_network_99.rds",
+    rnull = 0.99, ##obvi change
+    mh_csv = "../../results/full/mh/mh_wmeta.csv", 
+    workflow_mode = "full", 
+    seed = 1
+  )
+
+inp_0_25 <- list(
+    sample_network = 
+      "rnull_0_25/sample_network.rds", 
+      #"sample_network_99.rds",
+    rnull = 0.25, ##obvi change
+    mh_csv = "../../results/full/mh/mh_wmeta.csv", 
+    workflow_mode = "full", 
+    seed = 1
+  )
+
+
+
+# Get the vector of sample IDs associated with this cluster
+get_cluster_samples <- function(cluster) {
+  cluster %>%
+    tidygraph::activate(nodes) %>%
+    as_tibble() %$%
+    sample_id
+}
+
+
+
+# Add cluster IDs and sizes to a network
+add_cluster_info <- function(network) {
+  network %>%
+    tidygraph::activate(nodes) %>%
+    mutate(cluster_id = tidygraph::group_components()) %>%
+    group_by(cluster_id) %>%
+    mutate(cluster_size = n()) %>%
+    ungroup()
+}
+
+
+
+# Read in relatedness network ------------------------------------------
+contains_3D7 <- read.csv("contains_3D7_bothloci.csv")
+
+contains_3D7 <-  contains_3D7 %>% 
+  dplyr::select(-X) %>%
+  #pivot_wider(names_from = region, values_from = c(contains_3D7, only_3D7))  %>% 
+  mutate(D7 = ifelse(only_3D7, "Only 3D7", 
+                     ifelse(contains_3D7, "Contains 3D7", "No 3D7"))) %>% 
+  mutate(D7 = factor(D7, levels = c("No 3D7", "Contains 3D7", "Only 3D7")))
+
+sample_network <- read_rds(inp$sample_network)
+sample_network <- sample_network %>% activate(nodes) %>%
+  left_join(contains_3D7, by=join_by(sample_id == FieldID))
+
+sample_network_0_25 <- read_rds(inp_0_25$sample_network)
+sample_network_0_25 <- sample_network_0_25 %>% activate(nodes) %>%
+  left_join(contains_3D7, by=join_by(sample_id == FieldID))
+
+# Separate the graph into clusters of high relatedness -----------------
+alpha_val <- 0.05
+if (inp$rnull == 1) {
+  sample_network_highrel <- sample_network %>%
+    tidygraph::activate(edges) %>%
+    filter(btwn_host_rel >= inp$rnull, p_adjust >= alpha_val)
+} else {
+  sample_network_highrel <- sample_network %>%
+    tidygraph::activate(edges) %>%
+    filter(btwn_host_rel >= inp$rnull, p_adjust >= alpha_val)
+}
+sample_network_highrel_wcomp <- sample_network_highrel %>%
+  add_cluster_info()
+
+
+
+if (inp_0_25$rnull == 1) {
+  sample_network_highrel_0_25 <- sample_network_0_25 %>%
+    tidygraph::activate(edges) %>%
+    filter(btwn_host_rel >= inp_0_25$rnull, p_adjust >= alpha_val)
+} else {
+  sample_network_highrel_0_25 <- sample_network_0_25 %>%
+    tidygraph::activate(edges) %>%
+    filter(btwn_host_rel >= inp_0_25$rnull, p_adjust >= alpha_val)
+}
+sample_network_highrel_wcomp_0_25 <- sample_network_highrel_0_25 %>%
+  add_cluster_info()
+```
+
+## Zambia
+
+### Clustering Across Provinces
+
+```{r out.width = "100%"}
+# Recalculate cluster sizes for Zambia ---------------------------------
+zambia_network_highrel <- sample_network_highrel %>%
+  tidygraph::activate(nodes) %>%
+  filter(country == "Zambia") %>%
+  mutate(cluster_id = tidygraph::group_components()) %>%
+  group_by(cluster_id) %>%
+  mutate(cluster_size = n()) %>%
+  ungroup()
+
+
+# Plot highly-related clusters in Zambia and province of collection ----
+zambia_network_highrel %>%
+  tidygraph::activate(nodes) %>%
+  filter(cluster_size > 4, 
+         !is.na(D7)) %>%
+  ggraph::ggraph(layout = "fr") +
+  ggraph::geom_edge_link() +
+  ggraph::geom_node_point(
+    mapping = aes(fill = province_name, shape = D7, alpha=D7), 
+    size = 2
+  ) +
+  scale_shape_manual(
+    values = c("Only 3D7" = 21,"Contains 3D7" = 23, "No 3D7" = 4)
+  ) +
+  scale_fill_brewer(
+    palette = "Spectral", 
+    guide = guide_legend(override.aes = list(shape = 21))
+  ) +
+  scale_alpha_manual(
+    values = c("Only 3D7" = 1,"Contains 3D7" = 0.5, "No 3D7" = 1)
+  ) +
+  labs(
+    fill = "Province", 
+    alpha = "Contains 3D7",
+    shape = "Contains 3D7"
+  )
+
+test_nodes_zambia <- zambia_network_highrel %>% tidygraph::activate(nodes) %>%
+  as.data.frame()
+
+test_nodes_zambia_grouped <- test_nodes_zambia %>% group_by(cluster_id, province_name) %>%
+  dplyr::summarize(n = n(),
+            n_only3D7 = sum(D7 == "Only 3D7"),
+            n_contains = sum(D7 == "Contains 3D7"))
+
+#ggsave("FIGURES/Zambia_3D7_clusters_99.png", dpi=800, height=4, width = 6)
+```
+
+## Southern Province Specificially
+
+```{r out.width = "100%"}
+# Recalculate cluster sizes for Zambia ---------------------------------
+southern_network_highrel <- sample_network_highrel %>%
+  tidygraph::activate(nodes) %>%
+  filter(country == "Zambia", province_name=="Southern Province") %>%
+  mutate(cluster_id = tidygraph::group_components()) %>%
+  group_by(cluster_id) %>%
+  mutate(cluster_size = n()) %>%
+  ungroup()
+
+
+southern_network_highrel_0_25 <- sample_network_highrel_0_25 %>%
+  tidygraph::activate(nodes) %>%
+  filter(country == "Zambia", province_name=="Southern Province") %>%
+  mutate(cluster_id = tidygraph::group_components()) %>%
+  group_by(cluster_id) %>%
+  mutate(cluster_size = n()) %>%
+  ungroup()
+
+isolated_0_25 <- southern_network_highrel_0_25 %>%
+  activate(nodes) %>%
+  mutate(deg = centrality_degree()) %>%
+  as_tibble() %>%
+  summarise(n_isolated = sum(deg == 0),
+            n_not_isolated = sum(deg != 0))
+
+southern_network_highrel_0_25
+
+
+
+# Plot highly-related clusters in Zambia and province of collection ---- rhat = 0.25
+plot_0_25 <- southern_network_highrel_0_25 %>%
+  tidygraph::activate(nodes) %>%
+  filter(!is.na(D7)) %>%
+  ggraph::ggraph(layout = "fr") +
+  ggraph::geom_edge_link(color = "grey") +
+  ggraph::geom_node_point(
+    mapping = aes(shape = D7, fill = D7), 
+    size = 2
+  ) +
+  scale_shape_manual(
+    values = c("Only 3D7" = 21,"Contains 3D7" = 23, "No 3D7" = 20)
+  ) +
+  scale_fill_manual(
+    values = c("Only 3D7" = "#3288BD", "Contains 3D7" = "#3288BD40", "No 3D7" = "black")
+  ) +
+  labs(
+    fill = "3D7 Content", 
+    shape = "3D7 Content"
+  ) + ggtitle("r̂ ≤ 0.25") + theme(plot.title = element_text(hjust = 1))
+plot_0_25
+test_nodes_0_25 <- southern_network_highrel_0_25 %>% tidygraph::activate(nodes) %>%
+  as.data.frame()
+
+test_nodes_grouped_0_25 <- test_nodes_0_25 %>% group_by(cluster_id) %>%
+  dplyr::summarize(n = n(),
+            n_only3D7 = sum(D7 == "Only 3D7"),
+            n_contains = sum(D7 == "Contains 3D7"))
+
+sum(test_nodes_grouped_0_25$n_contains)
+sum(test_nodes_grouped_0_25$n_only3D7)
+
+#ggsave("FIGURES/Southern_3D7_clusters_0_25.png", dpi=800, height=4, width = 6)
+
+# Plot highly-related clusters in Zambia and province of collection ----
+plot_99 <- southern_network_highrel %>%
+  tidygraph::activate(nodes) %>%
+  filter(!is.na(D7)) %>%
+  ggraph::ggraph(layout = "fr") +
+  ggraph::geom_edge_link(color = "grey") +
+  ggraph::geom_node_point(
+    mapping = aes(shape = D7, fill = D7), 
+    size = 2
+  ) +
+  scale_shape_manual(
+    values = c("Only 3D7" = 21,"Contains 3D7" = 23, "No 3D7" = 20)
+  ) +
+  scale_fill_manual(
+    values = c("Only 3D7" = "#3288BD", "Contains 3D7" = "#3288BD40", "No 3D7" = "black")
+  ) +
+  labs(
+    fill = "3D7 Content", 
+    shape = "3D7 Content"
+  ) + ggtitle("r̂ ≤ 0.99") + theme(plot.title = element_text(hjust = 1))
+
+test_nodes_99 <- southern_network_highrel %>% tidygraph::activate(nodes) %>%
+  as.data.frame()
+
+test_nodes_grouped_99 <- test_nodes_99 %>% group_by(cluster_id) %>%
+  dplyr::summarize(n = n(),
+            n_only3D7 = sum(D7 == "Only 3D7"),
+            n_contains = sum(D7 == "Contains 3D7"))
+
+#ggsave("FIGURES/Southern_3D7_clusters_99.png", dpi=800, height=4, width = 6)
+
+plot_99 / plot_0_25 + plot_layout(guides = "collect") + plot_annotation(tag_levels = "A")
+plot_99 
+ggsave("FIGURES/Southern_3D7_clusters_99.png", dpi=800, height=4, width = 6)
+```
+
+### Do SEPARATE per loci
+
+
+```{R taij. D}
+library(pegas)
+library(ape)
+#setwd("C://Users/zgottho2/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/CSP project/")
+setwd("C://Users/zoeor/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/CSP PAPER/")
+## effective size is from coi_provinces
+
+TD  <- R.asv
+
+library(msa)
+taji_T1 <- data.frame(province = c(), taij = c())
+for(p in province_list){
+  TD_p <- TD %>% dplyr::filter(My_Regions == p) %>% 
+    filter(Locus == "Pf3D7_03_v3-221463-221712-1B")
+  input <- msa(DNAStringSet(TD_p$ASV))
+  t <- tajima.test(as.DNAbin(input))
+  taji_T1 <- rbind(taji_T1, c(p, t$D, t$Pval.normal, t$Pval.beta))
+}
+
+
+taji_T2 <- data.frame(province = c(), taij = c())
+for(p in province_list){
+  TD_p <- TD %>% filter(My_Regions == p) %>% 
+    filter(Locus == "Pf3D7_03_v3-221295-221532-2")
+  input <- msa(DNAStringSet(TD_p$ASV))
+  t <- tajima.test(as.DNAbin(input))
+  taji_T2 <- rbind(taji_T2, c(p, t$D, t$Pval.normal, t$Pval.beta))
+}
+colnames(taji_T1) <- c("province", "TD", "pval.norm", "pval.beta")
+colnames(taji_T2) <- c("province", "TD", "pval.norm", "pval.beta")
+taji <- rbind(taji_T1 %>% mutate(target = "DV10-Th2R"), 
+              taji_T2 %>% mutate(target = "Th3R"))
+
+
+write.csv(taji, "FIGURES/taji.D.results.csv", row.names = F)
+
+```
+
