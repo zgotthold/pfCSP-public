@@ -26,6 +26,7 @@ conflicted::conflicts_prefer(readxl::read_xlsx)
 conflicted::conflicts_prefer(stats::chisq.test)
 conflicted::conflicts_prefer(dplyr::filter)
 conflicted::conflicts_prefer(base::as.factor)
+conflicted::conflicts_prefer(dplyr::summarize)
 
 offset = 1
 V31B_amp = "QGHNMPNDPNRNVDENANANSAVKNNNNEEPSDKHIKEYLNKIQNSLSTEWSPCSVTCGNGIQ"
@@ -35,6 +36,11 @@ Th2R = substring(V31B_amp, 311-281+offset, 327 - 281+offset)
 Th3R = substring(V32_amp, 352-337+offset, 363-337+offset)
 
 PRINT_PLOTS = FALSE
+
+
+## MAJOR TODO 
+#TODO
+# Fix up moxico leste (this involves checking the Slack messages and figuring out if what I'm doing in the incidence calculations matches what I'm doing here. This probably should not be a separate region and just should be merged with Moxico.)
 ```
 
 ## Reading in Dataframes
@@ -45,7 +51,8 @@ setwd("/Users/gotthold/JHU - OneDrive/OneDrive - Johns Hopkins/Collaboration wit
 #setwd("C://Users/zgottho2/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/CSP project/")
 
 country_key_map <- read.csv("DATA/country_key_map.csv")
-country_key_map_short <- country_key_map %>% group_by(My_Regions) %>% dplyr::summarize(COUNTRY = min(COUNTRY), NAME = min(Regions_ESA))
+country_key_map_short <- country_key_map %>% group_by(My_Regions) %>% dplyr::summarize(COUNTRY = min(COUNTRY), NAME = min(Regions_ESA),
+                                                                                       incidence_name = min(incidence_name))
 
 metadata <- read.csv("DATA/All_GenE8_Countries_Epi_Harmonized_SA.csv") 
 COI_table <- read.csv("DATA/coi_table.csv")
@@ -130,7 +137,7 @@ both_amplicons = rbind(dcifer_freqs_amp1 %>% dplyr::rename(freq = unlist.dcifer_
 
 
 
-ggplot(both_amplicons, aes(x = codon_numeric, y = freq, fill = cleaned_AA)) + geom_bar(stat = "identity") + 
+mutation_plot <- ggplot(both_amplicons, aes(x = codon_numeric, y = freq, fill = cleaned_AA)) + geom_bar(stat = "identity") + 
   ggtitle("Mutations in CSP C-Terminus") +
   ggplot2::annotate("rect",xmin = 293,xmax = 302, ymin = 1.01, ymax = 1.04, fill = "darkblue") +
   geom_line(data = data.frame(target = c("DV10", "Th2R", "Th3R"), cleaned_AA = c(NA,NA,NA),
@@ -874,168 +881,67 @@ if(PRINT_PLOTS){
 
 ```{r correlation}
 
-
-#het is He
-#freq.3D7
-#incidence <- read.csv("C:/Users/zgottho2/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/Country Case Counts/incidence DRAFT.csv") %>%
-#incidence <- read.csv("C:/Users/zoeor/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/Country Case Counts/incidence DRAFT.csv") %>% 
-#incidence <- read.csv("C:/Users/zgottho2/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/Country Case Counts/incidence DRAFT.csv") %>%
-
-#  group_by(province_name) %>% 
-#  dplyr::summarize(cases = sum(cases),
- #           population = sum(total_pop),
- #           incidence = cases / population) %>% left_join(country_key_map, by=join_by(province_name==incidence_name)) %>%
- # filter(!is.na(Regions_ESA))
-
-#incidence <- read.csv("C:/Users/zgottho2/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/Country Case Counts/Country Overall Cases/DRAFT_PROVINCE_INCIDENCE.csv")  %>% mutate(
-
 cor <- HE.malaria.em %>% left_join(freq.3D7) %>%
   mutate(freq = replace_na(freq, 0)) %>%
-  left_join(incidence, by = join_by(province == province_name))
-
-## TODO FIX WHATEVER IS GOING ON HERE
-
+  left_join(country_key_map_short, by = join_by(province == My_Regions)) %>%
+  left_join(incidence, by = join_by(incidence_name== province_name)) 
+  
 ## TODO fix up Moxico Leste
-#lm.df <- merge(cor, incidence, by.x = "province", by.y="My_Regions")
 
-### adding in COI and %polyclonal
-#COI_table <- COI_table %>% filter(specimen_id %in% R.asv$FieldID)
 coi_provinces <- COI_table %>% left_join(metadata, by = join_by(specimen_id == form.participant_id)) %>% 
-  #left_join(country_key_map, by = join_by(facility_province == Provinces_Contained_Metadata))%>%
   group_by(My_Regions) %>% dplyr::summarize(mean_coi = mean(coi),
                                         per_poly = sum(coi==1)/n(),
                                         total_coi = sum(coi))
 
-lm.df <- lm.df %>% left_join(coi_provinces, by = join_by(province == My_Regions))
+cor <- cor %>% left_join(coi_provinces, by = join_by(province == My_Regions))
 
-lm.df <- lm.df %>% dplyr::select(-Provinces_Contained_SNPs)%>% distinct()
-
-
-lm.test <- lm(data = lm.df %>% filter(province != "Southern Province"), freq ~ He * incidence)
+lm.test <- lm(data = cor %>% filter(province != "Southern Province"), freq ~ He * incidence_per_1000)
 lm.test %>% tbl_regression()
-lm.df.long <- pivot_longer(lm.df, cols = c(He, incidence))
+
+lm.df.long <- pivot_longer(cor, cols = c(He, incidence_per_1000))
 lm.df.long <- lm.df.long %>% mutate(
   name = ifelse(name == "He", "Expected Heterozygosity", "Malaria Incidence")
 )
 library(ggnewscale)
-size = 3
-scatterplot1 <- ggplot(lm.df, aes(x = incidence, y = freq)) + 
-  geom_point(data = . %>% filter(COUNTRY == "Angola"), shape = 1, aes(color = province), size = size) +
-  labs(color = "Angola") +
-  guides(color = guide_legend(ncol = 2)) +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "Eswatini"), shape = 2, aes(color = province), size = size) +
-  labs(color = "Eswatini") +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "Namibia"), shape = 15, aes(color = province), size = size) +
-  labs(color = "Namibia") +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "RSA"), shape = 8, aes(color = province), size = size) +
-  labs(color = "RSA") +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "Zambia"), shape = 17, aes(color = province), , size = size) +
-  labs(color = "Zambia") +
-
-  #geom_point(aes(color = province, shape = COUNTRY)) + 
-  stat_poly_line(color = "deeppink", linetype="dashed", se = F) + stat_poly_eq(color = "deeppink") +
-  stat_poly_line(data = . %>% filter(province != "Southern Province"), color = "black", se = F) + 
-  stat_poly_eq(data = . %>% filter(province != "Southern Province"),
-               color = "black",
-               label.y = c(0.92, 0.92)) +
-  theme_bw()  + ylab("Frequency of 3D7") +
-  xlab("Incidence per 1000 at Risk") +
-  guides(color = guide_legend(ncol = 2)) 
-
-scatterplot2 <- ggplot(lm.df, aes(x = He, y = freq)) + 
-  geom_point(data = . %>% filter(COUNTRY == "Angola"), shape = 1, aes(color = province), size = size) +
-  labs(color = "Angola") +
-  guides(color = guide_legend(ncol = 2)) +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "Eswatini"), shape = 2, aes(color = province), size = size) +
-  labs(color = "Eswatini") +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "Namibia"), shape = 15, aes(color = province), size = size) +
-  labs(color = "Namibia") +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "RSA"), shape = 8, aes(color = province), size = size) +
-  labs(color = "RSA") +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "Zambia"), shape = 17, aes(color = province), , size = size) +
-  labs(color = "Zambia") +
-
-  #geom_point(aes(color = province, shape = COUNTRY)) + 
-  stat_poly_line(color = "deeppink", linetype="dashed", se = F) + stat_poly_eq(color = "deeppink",
-                                                                              formula = y ~x) +
-  stat_poly_line(data = . %>% filter(province != "Southern Province"), color = "black", se = F) + 
-  stat_poly_eq(data = . %>% filter(province != "Southern Province"),
-              color = "black",
-              label.y = c(0.92, 0.92)) +
-  theme_bw() + ylab("Frequency of 3D7") +
-  xlab("Expected Heterozygosity") +
-  guides(color = guide_legend(ncol = 2)) 
 
 
-scatterplot3 <- ggplot(lm.df, aes(x = mean_coi, y = freq)) + 
-  geom_point(data = . %>% filter(COUNTRY == "Angola"), shape = 1, aes(color = province), size = size) +
-  labs(color = "Angola") +
-  guides(color = guide_legend(ncol = 2)) +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "Eswatini"), shape = 2, aes(color = province), size = size) +
-  labs(color = "Eswatini") +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "Namibia"), shape = 15, aes(color = province), size = size) +
-  labs(color = "Namibia") +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "RSA"), shape = 8, aes(color = province), size = size) +
-  labs(color = "RSA") +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "Zambia"), shape = 17, aes(color = province), , size = size) +
-  labs(color = "Zambia") +
+make_cor_scatterplot <- function(xvar, xlab){
+  size = 3
+  ggplot(cor, aes(x = !!rlang::sym(xvar), y = freq)) + 
+    geom_point(data = . %>% filter(COUNTRY == "Angola"), shape = 1, aes(color = province), size = size) +
+    labs(color = "Angola") +
+    guides(color = guide_legend(ncol = 2)) +
+    new_scale_color() +
+    geom_point(data = . %>% filter(COUNTRY == "Eswatini"), shape = 2, aes(color = province), size = size) +
+    labs(color = "Eswatini") +
+    new_scale_color() +
+    geom_point(data = . %>% filter(COUNTRY == "Namibia"), shape = 15, aes(color = province), size = size) +
+    labs(color = "Namibia") +
+    new_scale_color() +
+    geom_point(data = . %>% filter(COUNTRY == "RSA"), shape = 8, aes(color = province), size = size) +
+    labs(color = "RSA") +
+    new_scale_color() +
+    geom_point(data = . %>% filter(COUNTRY == "Zambia"), shape = 17, aes(color = province), , size = size) +
+    labs(color = "Zambia") +
+    geom_smooth(method = "lm", color = "deeppink", linetype = "dashed", se = F) +
+    geom_smooth(data = . %>% filter(province != "Southern Province"), method = "lm", color = "black", linetype = "dashed", se  = F) +
+      stat_poly_eq(color = "deeppink") +
+    stat_poly_eq(data = . %>% filter(province != "Southern Province"),
+                 color = "black",
+                 label.y = c(0.92, 0.92)) +
+    theme_bw()  + ylab("Frequency of 3D7") +
+    xlab(xlab) +
+    guides(color = guide_legend(ncol = 2)) 
+}
 
-  #geom_point(aes(color = province, shape = COUNTRY)) + 
-  stat_poly_line(color = "deeppink", linetype="dashed", se = F) + stat_poly_eq(color = "deeppink") +
-  stat_poly_line(data = . %>% filter(province != "Southern Province"), color = "black", se = F) + 
-  stat_poly_eq(data = . %>% filter(province != "Southern Province"),
-               color = "black",
-               label.y = c(0.92, 0.92)) +
-  theme_bw() + ylab("Frequency of 3D7") +
-  xlab("Mean COI") +
-  guides(color = guide_legend(ncol = 2)) 
-
-
-scatterplot4 <- ggplot(lm.df, aes(x = per_poly, y = freq)) + 
-  geom_point(data = . %>% filter(COUNTRY == "Angola"), shape = 1, aes(color = province), size = size) +
-  labs(color = "Angola") +
-  guides(color = guide_legend(ncol = 2)) +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "Eswatini"), shape = 2, aes(color = province), size = size) +
-  labs(color = "Eswatini") +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "Namibia"), shape = 15, aes(color = province), size = size) +
-  labs(color = "Namibia") +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "RSA"), shape = 8, aes(color = province), size = size) +
-  labs(color = "RSA") +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "Zambia"), shape = 17, aes(color = province), , size = size) +
-  labs(color = "Zambia") +
-
-  #geom_point(aes(color = province, shape = COUNTRY)) + 
-  stat_poly_line(color = "deeppink", linetype="dashed", se = F) + stat_poly_eq(color = "deeppink") +
-  stat_poly_line(data = . %>% filter(province != "Southern Province"), color = "black", se = F) + 
-  stat_poly_eq(data = . %>% filter(province != "Southern Province"),
-               color = "black",
-               label.y = c(0.92, 0.92)) +
-  theme_bw() + ylab("Frequency of 3D7") +
-  xlab("Percent Polyclonal") +
-  guides(color = guide_legend(ncol = 2)) 
-
-scatterplot1 + scatterplot2 + scatterplot3 + scatterplot4 + plot_layout(guides = "collect")
+make_cor_scatterplot("incidence_per_1000", "Incidence per 1000 at Risk") +
+  make_cor_scatterplot("He", "Expected Heterozygosity")+
+  make_cor_scatterplot("mean_coi", "Mean COI") +
+  make_cor_scatterplot("per_poly", "Percent Polyclonal") + plot_layout(guides = "collect")
 ggsave("FIGURES/Supplemental/phased/scatterplot_fig1.png", height = 10, width = 11)
 
 print("Is there a significant correlation between the ")
 cor.test(cor$He, cor$freq, method = "spearman")
-
 cor.test(cor$incidence_per_1000, cor$freq, method = "spearman")
 
 ```
@@ -1080,25 +986,6 @@ pcoa_graph <- pcoa_graph %>%
   distinct()
   
 
-
-
-scatterplot1 <- ggplot(lm.df, aes(x = incidence, y = freq)) + 
-  geom_point(data = . %>% filter(COUNTRY == "Angola"), shape = 1, aes(color = province), size = size) +
-  labs(color = "Angola") +
-  guides(color = guide_legend(ncol = 2)) +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "Eswatini"), shape = 2, aes(color = province), size = size) +
-  labs(color = "Eswatini") +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "Namibia"), shape = 15, aes(color = province), size = size) +
-  labs(color = "Namibia") +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "RSA"), shape = 8, aes(color = province), size = size) +
-  labs(color = "RSA") +
-  new_scale_color() +
-  geom_point(data = . %>% filter(COUNTRY == "Zambia"), shape = 17, aes(color = province), , size = size) +
-  labs(color = "Zambia") 
-
 library(ggrepel)
 pcoa_graph <- pcoa_graph %>% left_join(country_key_map %>% dplyr::select(My_Regions, LABEL_ABB) %>% distinct(), by = join_by(My_Regions)) 
 main_pcoa_graph <- ggplot(pcoa_graph, aes(x = Axis.2, y = -Axis.1, label = LABEL_ABB.x)) + 
@@ -1129,23 +1016,6 @@ if(PRINT_PLOTS){
     ggsave("FIGURES/pcoa_graph.png", height = 7, width = 10)
   
 }
-
-
-### lm comparison with other values
-### other values from "lm.df" 
-## TODO include COI (% poly and mean COI)
-
-pcoa_graph <- pcoa_graph %>% left_join(lm.df %>% distinct(province_name, incidence, He), 
-                                       by = join_by(My_Regions == province_name))
-
-lm.PC1 <- lm(Axis.1 ~ lat + long + incidence + He, data = pcoa_graph)
-table.PC1 <- tbl_regression(lm.PC1) %>%  bold_p(t = 0.05, q = FALSE)
-
-lm.PC2 <- lm(Axis.2 ~ lat + long + incidence + He, data = pcoa_graph)
-table.PC2 <- tbl_regression(lm.PC2) %>%  bold_p(t = 0.05, q = FALSE)
-
-tables <- tbl_merge(list(table.PC1, table.PC2)) 
-tables 
 
 ```
 
@@ -1592,7 +1462,8 @@ ggsave("FIGURES/Southern_3D7_clusters_99.png", dpi=800, height=4, width = 6)
 library(pegas)
 library(ape)
 #setwd("C://Users/zgottho2/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/CSP project/")
-setwd("C://Users/zoeor/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/CSP PAPER/")
+#setwd("C://Users/zoeor/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/CSP PAPER/")
+setwd("/Users/gotthold/OneDrive - Johns Hopkins/Collaboration with Dr. Wesolowski/CSP PAPER")
 ## effective size is from coi_provinces
 
 TD  <- R.asv
